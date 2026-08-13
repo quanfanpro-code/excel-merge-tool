@@ -20,14 +20,9 @@ TABLE_DETECTION_CONFIG = {
     'header_score_threshold': 0.5,
     'data_row_score_threshold': 0.5,
     'max_consecutive_failures': 5,
-    'max_consecutive_empty': 3,
     'col_count_tolerance': 0.3,
     'signature_similarity_threshold': 0.85,
     'min_table_rows': 1,
-    'block_min_rows': 3,
-    'block_min_non_empty_cells': 2,
-    'block_max_gap_rows': 2,
-    'block_score_threshold': 0.18,
     'weak_keywords': [
         '日期', '时间', '摘要', '金额', '余额', '借', '贷',
         '收', '支', '对方', '账号', '附言', '用途', '币种',
@@ -50,6 +45,5 @@ ADVANCED_SETTINGS_DEFAULTS = {
     'max_consecutive_failures': 5,
     'column_variance': 30,
     'similarity_threshold': 85,
-    'max_consecutive_empty': 3,
     'min_table_rows': 1,
 }

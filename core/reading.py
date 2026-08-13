@@ -248,7 +248,6 @@ def get_sheet_for_merge_info(file_path: str, sheet_name: Optional[str] = None) -
 def read_file_data(
     file_path: str,
     sheet_name: Optional[str] = None,
-    is_fast_mode: bool = False
 ) -> Tuple[Optional[List[List[Any]]], int, int, Any, Any, bool, str, Dict[str, float]]:
     """
     读取文件数据（统一入口）
@@ -256,7 +255,6 @@ def read_file_data(
     Args:
         file_path: 文件路径
         sheet_name: sheet名称（仅xlsx/xls有效），为None时读取第一个sheet
-        is_fast_mode: 是否快速模式
     """
     data = []
     max_row = 0

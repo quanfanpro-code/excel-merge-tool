@@ -131,7 +131,8 @@ def _looks_like_amount_cached(key) -> bool:
     text = str(key).strip() if not isinstance(key, str) else key
     if not text:
         return False
-    text_clean = text.replace('￥', '').replace('$', '').replace('€', '').replace(' ', '')
+    # 货币符号集合与 cleaning.py 的 _CURRENCY_PATTERN 保持一致（￥$€£¥），避免「认出是金额却洗不掉」或反之
+    text_clean = text.replace('￥', '').replace('$', '').replace('€', '').replace('£', '').replace('¥', '').replace(' ', '')
     # 4 位及以内的纯整数通常是序号，不算金额；带货币符号/小数点/千分位的仍算
     if text.isdigit() and len(text) <= 4:
         return False

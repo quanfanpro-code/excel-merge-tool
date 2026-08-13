@@ -38,7 +38,6 @@ class SheetSelectionDialog(ctk.CTkToplevel):
         self.grab_set()
 
         self._create_widgets()
-        self._default_select_all()
 
         # 居中于父窗口
         self.update_idletasks()
@@ -146,12 +145,6 @@ class SheetSelectionDialog(ctk.CTkToplevel):
             btn_frame, text="跳过(仅第一个Sheet)", command=self._skip, width=160,
             fg_color="transparent", border_width=1
         ).pack(side="right", padx=5)
-
-    def _default_select_all(self):
-        """默认全选"""
-        for file_name in self.sheet_vars:
-            for var in self.sheet_vars[file_name].values():
-                var.set(True)
 
     def _select_all_sheets(self, file_name: str):
         """选择某文件的所有sheet"""

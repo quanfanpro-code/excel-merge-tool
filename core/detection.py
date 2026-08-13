@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-表格区域检测（状态机 + 表头打分 + 候选块）
+表格区域检测（表头打分 + 数据行扩展）
 """
 
 import re
@@ -18,28 +18,10 @@ from .patterns import (
 from .header_grid import merge_multi_row_header
 
 
-class TableDetectionState:
-    BEFORE_TABLE = 'BEFORE_TABLE'
-    IN_TABLE = 'IN_TABLE'
-    AFTER_TABLE = 'AFTER_TABLE'
-
-
 def count_non_empty_cells(row: List[Any]) -> int:
     if not row:
         return 0
     return sum(1 for cell in row if cell is not None and str(cell).strip() != '')
-
-
-def get_row_fill_ratio(row: List[Any]) -> float:
-    if not row:
-        return 0.0
-    return count_non_empty_cells(row) / len(row)
-
-
-def is_mostly_empty_row(row: List[Any], threshold: float = 0.7) -> bool:
-    if not row:
-        return True
-    return count_non_empty_cells(row) / len(row) < threshold if row else True
 
 
 def looks_like_long_description_row(row: List[Any]) -> bool:
@@ -324,85 +306,6 @@ def estimate_table_column_count(header: List[Any], data_rows: List[List[Any]]) -
     return counter.most_common(1)[0][0]
 
 
-def score_table_block(rows: List[List[Any]], start_row: int, end_row: int) -> Dict[str, Any]:
-    segment = rows[start_row:end_row + 1]
-    if not segment:
-        return {'score': 0.0, 'fill_ratio': 0.0, 'stability': 0.0, 'data_density': 0.0, 'noise_ratio': 1.0}
-    fill_ratios = [get_row_fill_ratio(r) for r in segment]
-    fill_ratio = sum(fill_ratios) / len(fill_ratios) if fill_ratios else 0.0
-    col_counts = [count_non_empty_cells(r) for r in segment]
-    max_count = max(col_counts) if col_counts else 0
-    min_count = min(col_counts) if col_counts else 0
-    stability = max(0.0, 1.0 - ((max_count - min_count) / max_count)) if max_count else 0.0
-
-    non_empty_cells = 0
-    data_feature_cells = 0
-    noise_rows = 0
-    for row in segment:
-        row_has_noise = looks_like_page_marker(row) or looks_like_print_info(row)
-        for cell in row:
-            if cell is None or str(cell).strip() == '':
-                continue
-            non_empty_cells += 1
-            if looks_like_date(cell) or looks_like_datetime(cell) or looks_like_amount(cell) or looks_like_account_number(cell):
-                data_feature_cells += 1
-        if row_has_noise or looks_like_total_or_subtotal(row):
-            noise_rows += 1
-
-    data_density = (data_feature_cells / non_empty_cells) if non_empty_cells else 0.0
-    noise_ratio = noise_rows / len(segment) if segment else 1.0
-    score = (0.35 * fill_ratio) + (0.25 * stability) + (0.30 * data_density) - (0.20 * noise_ratio)
-    return {
-        'score': max(0.0, min(1.0, score)),
-        'fill_ratio': round(fill_ratio, 4),
-        'stability': round(stability, 4),
-        'data_density': round(data_density, 4),
-        'noise_ratio': round(noise_ratio, 4),
-    }
-
-
-def detect_candidate_blocks(rows: List[List[Any]]) -> List[Dict[str, Any]]:
-    if not rows:
-        return []
-    min_rows = TABLE_DETECTION_CONFIG.get('block_min_rows', 3)
-    min_non_empty_cells = TABLE_DETECTION_CONFIG.get('block_min_non_empty_cells', 2)
-    max_gap_rows = TABLE_DETECTION_CONFIG.get('block_max_gap_rows', 2)
-    blocks = []
-    start = -1
-    gap = 0
-    for idx, row in enumerate(rows):
-        non_empty = count_non_empty_cells(row)
-        noisy = looks_like_page_marker(row) or looks_like_print_info(row)
-        if noisy:
-            if start != -1:
-                end = idx - 1
-                if end >= start and (end - start + 1) >= min_rows:
-                    blocks.append({'start_row': start, 'end_row': end, **score_table_block(rows, start, end)})
-                start = -1
-                gap = 0
-            continue
-        row_active = (non_empty >= min_non_empty_cells) and (not noisy)
-        if row_active:
-            if start == -1:
-                start = idx
-            gap = 0
-            continue
-        if start != -1:
-            gap += 1
-            if gap > max_gap_rows:
-                end = idx - gap
-                if end >= start and (end - start + 1) >= min_rows:
-                    blocks.append({'start_row': start, 'end_row': end, **score_table_block(rows, start, end)})
-                start = -1
-                gap = 0
-    if start != -1:
-        end = len(rows) - 1
-        if end >= start and (end - start + 1) >= min_rows:
-            blocks.append({'start_row': start, 'end_row': end, **score_table_block(rows, start, end)})
-    blocks.sort(key=lambda b: (-b['score'], b['start_row']))
-    return blocks
-
-
 def build_header_signature(header: List[Any]) -> str:
     if not header:
         return ''
@@ -496,7 +399,7 @@ def detect_main_table_region(rows: List[List[Any]], sheet=None) -> Dict[str, Any
         'header': [], 'valid_columns': [], 'compact_header': [],
         'data_start': -1, 'data_end': -1, 'data_rows': [],
         'compact_data_rows': [], 'col_count': 0, 'error': None,
-        'audit': {'candidate_blocks': [], 'selected_block': None, 'header_failures': [], 'degradation_path': ''}
+        'audit': {'selected_block': None, 'header_failures': [], 'degradation_path': ''}
     }
     if not rows:
         result['error'] = '文件为空'
@@ -504,19 +407,9 @@ def detect_main_table_region(rows: List[List[Any]], sheet=None) -> Dict[str, Any
         return result
 
     # 用于收集分段计时信息
-    _timing = {'candidate_blocks': 0.0, 'header_detection': 0.0, 'data_extraction': 0.0}
+    _timing = {'header_detection': 0.0, 'data_extraction': 0.0}
 
     threshold = TABLE_DETECTION_CONFIG['header_score_threshold']
-
-    # 计时：候选块检测（仅用于审计展示，不再决定表头选择）
-    t_block_start = time.perf_counter()
-    candidate_blocks = detect_candidate_blocks(rows)
-    t_block_end = time.perf_counter()
-    _timing['candidate_blocks'] = t_block_end - t_block_start
-
-    if not candidate_blocks:
-        candidate_blocks = [{'start_row': 0, 'end_row': len(rows) - 1, 'score': 0.0, 'fill_ratio': 0.0, 'stability': 0.0, 'data_density': 0.0, 'noise_ratio': 1.0}]
-    result['audit']['candidate_blocks'] = candidate_blocks
 
     # 计时：全局扫描所有行，收集表头候选。
     # 关键修复：不再按“段落评分最高”挑选表头所在段，而是跨段落遍历整张表，

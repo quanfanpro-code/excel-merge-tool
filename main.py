@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Excel合并工具 v4.6 - 模块化重构版
+Excel合并工具 v4.7 - 模块化重构版
 
 功能：将多个Excel文件合并为一个，支持xlsx/xls/csv格式
 特性：

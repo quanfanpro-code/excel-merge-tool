@@ -39,7 +39,7 @@ class ExcelMergeApp(ctk.CTk):
         self._create_widgets()
 
     def _setup_window(self):
-        self.title("Excel合并工具 v4.5")
+        self.title("Excel合并工具 v4.7")
         self.geometry("980x760")
         self.minsize(860, 660)
         ctk.set_appearance_mode("system")
@@ -237,7 +237,6 @@ class ExcelMergeApp(ctk.CTk):
         TABLE_DETECTION_CONFIG['header_score_threshold'] = config.get('header_threshold', 0.5)
         TABLE_DETECTION_CONFIG['data_row_score_threshold'] = config.get('data_threshold', 0.5)
         TABLE_DETECTION_CONFIG['max_consecutive_failures'] = config.get('max_consecutive_failures', 5)
-        TABLE_DETECTION_CONFIG['max_consecutive_empty'] = config.get('max_consecutive_empty', 3)
         TABLE_DETECTION_CONFIG['col_count_tolerance'] = config.get('column_variance', 30) / 100.0
         TABLE_DETECTION_CONFIG['signature_similarity_threshold'] = config.get('similarity_threshold', 85) / 100.0
         TABLE_DETECTION_CONFIG['min_table_rows'] = config.get('min_table_rows', 1)

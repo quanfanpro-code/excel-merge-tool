@@ -33,6 +33,16 @@ def test_currency_symbol_is_amount():
     assert looks_like_amount('$50') is True
 
 
+def test_pound_yen_symbol_is_amount():
+    """英镑£、日元¥符号同样算金额，且与清洗端符号集合一致（R3 修复回归）"""
+    from core.cleaning import clean_amount_value
+    assert looks_like_amount('£100') is True
+    assert looks_like_amount('¥100') is True
+    # 识别为金额后，清洗端也必须能剥掉符号变成数字
+    assert clean_amount_value('£100') == 100
+    assert clean_amount_value('¥100') == 100
+
+
 def test_bracket_negative_is_amount():
     """括号负数算金额"""
     assert looks_like_amount('(100.00)') is True

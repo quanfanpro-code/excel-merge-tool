@@ -7,19 +7,14 @@ from typing import Dict, Optional, Callable
 
 import customtkinter as ctk
 
+from core.config import ADVANCED_SETTINGS_DEFAULTS
+
 
 class AdvancedSettingsPanel(ctk.CTkFrame):
     """高级设置面板（可折叠）"""
 
-    DEFAULTS = {
-        'header_threshold': 0.5,
-        'data_threshold': 0.5,
-        'max_consecutive_failures': 5,
-        'column_variance': 30,
-        'similarity_threshold': 85,
-        'max_consecutive_empty': 3,
-        'min_table_rows': 1,
-    }
+    # 默认值统一以 core.config 为准，避免两处各抄一份
+    DEFAULTS = ADVANCED_SETTINGS_DEFAULTS
 
     def __init__(self, parent, config: Dict, on_change_callback: Optional[Callable] = None, **kwargs):
         super().__init__(parent, **kwargs)
@@ -39,7 +34,6 @@ class AdvancedSettingsPanel(ctk.CTkFrame):
         self._create_slider("表头判定阈值", "header_threshold", 0.1, 0.9, 0.1)
         self._create_slider("数据行判定阈值", "data_threshold", 0.1, 0.9, 0.1)
         self._create_entry("连续失败次数", "max_consecutive_failures", 1, 20)
-        self._create_entry("连续空行数", "max_consecutive_empty", 1, 10)
         self._create_entry("最小表格行数", "min_table_rows", 1, 10)
         self._create_slider("列数允许波动(%)", "column_variance", 10, 50, 5)
         self._create_slider("分组相似度阈值(%)", "similarity_threshold", 50, 100, 5)

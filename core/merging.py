@@ -163,7 +163,6 @@ def process_single_sheet(
     file_name: str,
     file_ext: str,
     sheet_name: Optional[str],
-    is_fast_mode: bool,
     log_callback: Callable[[str], None],
     file_ctx: Optional[FileContext] = None,
     header_templates: Optional[List[Dict[str, Any]]] = None,
@@ -177,7 +176,6 @@ def process_single_sheet(
         file_name: 文件名
         file_ext: 文件扩展名
         sheet_name: sheet名称（None表示第一个sheet）
-        is_fast_mode: 是否快速模式
         log_callback: 日志回调
         file_ctx: 文件级上下文（提供格式缓存和工作簿复用，为None时回退到原有行为）
         header_templates: 已识别成功的表头模板列表，用于跳过重复的表头识别
@@ -212,7 +210,7 @@ def process_single_sheet(
 
     try:
         data, max_row, max_col, source_wb, source_ws, is_encrypted, error_msg, read_timing = read_file_data(
-            file_path, sheet_name=sheet_name, is_fast_mode=is_fast_mode
+            file_path, sheet_name=sheet_name
         )
 
         if is_encrypted:
@@ -258,8 +256,10 @@ def process_single_sheet(
                     # 数据行扩展：从 header_row 之后开始，带终止检测
                     # 逻辑与 detect_main_table_region 中 _try_detect_in_block 的数据行扩展一致
                     data_start_offset = header_row + header_row_count
-                    # 限制扫描上界，避免对整个文件做无意义遍历
-                    max_scan_rows = max(matched_tpl.get('data_row_count', 100) * 3, 100)
+                    # 限制扫描上界，避免对整个文件做无意义遍历。
+                    # 余量按模板原数据行数 ×10 估算：同结构但行数差异较大的文件（如月度 100 行、年度上千行）
+                    # 复用同一模板时也能采到尾部；终止仍由「连续非数据行」判定兜底，不会吞入第二张表。
+                    max_scan_rows = max(matched_tpl.get('data_row_count', 100) * 10, 100)
                     scan_end = min(len(data), data_start_offset + max_scan_rows)
                     max_cf = TABLE_DETECTION_CONFIG['max_consecutive_failures']
                     min_table_rows = TABLE_DETECTION_CONFIG['min_table_rows']
@@ -471,7 +471,7 @@ def merge_excel_files_with_callback(
             t0_task = time.perf_counter()
             result = process_single_sheet(
                 file_path, file_name, file_ext, sheet_name,
-                is_fast_mode, _safe_log,
+                _safe_log,
                 file_ctx=ctx,
                 header_templates=header_templates,
                 cancel_event=cancel_event,
