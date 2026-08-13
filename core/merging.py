@@ -262,7 +262,6 @@ def process_single_sheet(
                     max_scan_rows = max(matched_tpl.get('data_row_count', 100) * 3, 100)
                     scan_end = min(len(data), data_start_offset + max_scan_rows)
                     max_cf = TABLE_DETECTION_CONFIG['max_consecutive_failures']
-                    max_ce = TABLE_DETECTION_CONFIG['max_consecutive_empty']
                     min_table_rows = TABLE_DETECTION_CONFIG['min_table_rows']
                     data_threshold = TABLE_DETECTION_CONFIG['data_row_score_threshold']
 
@@ -275,7 +274,6 @@ def process_single_sheet(
 
                     data_rows = []
                     consecutive_failures = 0
-                    consecutive_empty = 0
                     data_start_row = -1
 
                     for row_idx in range(data_start_offset, scan_end):
@@ -286,14 +284,12 @@ def process_single_sheet(
 
                         row = data[row_idx]
 
-                        # 快速预过滤：空行
+                        # 快速预过滤：空行直接跳过，不终止采集。
+                        # 与 detect_main_table_region 保持一致：空行只是分隔符，
+                        # 仅当连续多个“非空但非数据”的行时才终止。
                         non_empty_count = count_non_empty_cells(row)
                         if non_empty_count == 0:
-                            consecutive_empty += 1
-                            if consecutive_empty >= max_ce and len(data_rows) >= min_table_rows:
-                                break
                             continue
-                        consecutive_empty = 0
 
                         # 快速预过滤：噪声行
                         if looks_like_repeated_header(row, merged_header):

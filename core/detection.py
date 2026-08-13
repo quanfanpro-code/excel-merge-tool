@@ -507,9 +507,8 @@ def detect_main_table_region(rows: List[List[Any]], sheet=None) -> Dict[str, Any
     _timing = {'candidate_blocks': 0.0, 'header_detection': 0.0, 'data_extraction': 0.0}
 
     threshold = TABLE_DETECTION_CONFIG['header_score_threshold']
-    block_score_threshold = TABLE_DETECTION_CONFIG.get('block_score_threshold', 0.18)
 
-    # 计时：候选块检测
+    # 计时：候选块检测（仅用于审计展示，不再决定表头选择）
     t_block_start = time.perf_counter()
     candidate_blocks = detect_candidate_blocks(rows)
     t_block_end = time.perf_counter()
@@ -519,132 +518,104 @@ def detect_main_table_region(rows: List[List[Any]], sheet=None) -> Dict[str, Any
         candidate_blocks = [{'start_row': 0, 'end_row': len(rows) - 1, 'score': 0.0, 'fill_ratio': 0.0, 'stability': 0.0, 'data_density': 0.0, 'noise_ratio': 1.0}]
     result['audit']['candidate_blocks'] = candidate_blocks
 
-    def _try_detect_in_block(block):
-        block_start = block['start_row']
-        block_end = block['end_row']
-        block_rows = rows[block_start:block_end + 1]
-        header_candidates = []
+    # 计时：全局扫描所有行，收集表头候选。
+    # 关键修复：不再按“段落评分最高”挑选表头所在段，而是跨段落遍历整张表，
+    # 选“表头打分”最高的那一行作为表头。避免数据较多被切成多段时，
+    # 误把某段里的真实交易记录当成表头，导致表头错位、数据大量丢失。
+    t_header_start = time.perf_counter()
+    header_candidates = []
+    for row_idx, row in enumerate(rows):
+        next_rows = rows[row_idx + 1:row_idx + 6]
+        sc = score_header_candidate(row, next_rows, row_idx)
+        if sc >= threshold:
+            header_candidates.append((sc, row_idx, row))
+    if not header_candidates:
+        result['audit']['header_failures'].append('整表无达到阈值的表头候选行')
+        result['error'] = '候选表头识别失败，已触发保底路径'
+        result['audit']['degradation_path'] = 'fallback_raw_extract'
+        return result
+    # 按「分数降序、同分时行号升序」排序，第一个即最高分且最靠前的候选。
+    header_candidates.sort(key=lambda x: (-x[0], x[1]))
+    best_score, best_header_row, best_header = header_candidates[0]
+    t_header_end = time.perf_counter()
+    _timing['header_detection'] = t_header_end - t_header_start
 
-        # 计时：表头识别
-        t_header_start = time.perf_counter()
-        for local_idx, row in enumerate(block_rows):
-            global_idx = block_start + local_idx
-            next_rows = block_rows[local_idx + 1:local_idx + 6] if local_idx < len(block_rows) - 5 else (block_rows[local_idx + 1:] if local_idx + 1 < len(block_rows) else [])
-            sc = score_header_candidate(row, next_rows, global_idx)
-            if sc >= threshold:
-                header_candidates.append((sc, global_idx, row))
-        if not header_candidates:
-            return {'success': False, 'error': f'候选块[{block_start + 1}-{block_end + 1}]无可信表头'}
-        header_candidates.sort(key=lambda x: (-x[0], x[1]))
-        t_header_end = time.perf_counter()
-        _timing['header_detection'] = t_header_end - t_header_start
+    excel_header_start_row = best_header_row + 1
+    header_row_count, merged_header = detect_multi_row_header(
+        rows, best_header_row, sheet=sheet, excel_header_start_row=excel_header_start_row
+    )
+    valid_columns = [i for i, val in enumerate(merged_header) if val is not None and str(val).strip() != '']
+    if not valid_columns:
+        valid_columns = [i for i, val in enumerate(merged_header) if val is not None]
+    compact_header = [merged_header[i] for i in valid_columns]
 
-        best_score, best_header_row, best_header = header_candidates[0]
-        for sc, row_idx, row in header_candidates[1:]:
-            if row_idx < best_header_row and (best_score - sc) < 0.1:
-                best_score, best_header_row, best_header = sc, row_idx, row
+    # 计时：数据行扩展（从表头之后向下扫描到文件末尾，跨段落连续采数）
+    t_data_start = time.perf_counter()
+    data_rows = []
+    consecutive_failures = 0
+    max_cf = TABLE_DETECTION_CONFIG['max_consecutive_failures']
+    min_table_rows = TABLE_DETECTION_CONFIG['min_table_rows']
+    data_threshold = TABLE_DETECTION_CONFIG['data_row_score_threshold']
+    data_start_offset = best_header_row + header_row_count
+    scan_end = len(rows)
+    sample_data_rows = [rows[r] for r in range(data_start_offset, min(data_start_offset + 15, scan_end))]
+    expected_col_count = estimate_table_column_count(merged_header, sample_data_rows)
+    data_start_row = -1
 
-        excel_header_start_row = best_header_row + 1
-        header_row_count, merged_header = detect_multi_row_header(
-            rows, best_header_row, sheet=sheet, excel_header_start_row=excel_header_start_row
-        )
-        valid_columns = [i for i, val in enumerate(merged_header) if val is not None and str(val).strip() != '']
-        if not valid_columns:
-            valid_columns = [i for i, val in enumerate(merged_header) if val is not None]
-        compact_header = [merged_header[i] for i in valid_columns]
+    for row_idx in range(data_start_offset, scan_end):
+        row = rows[row_idx]
 
-        data_rows = []
-        consecutive_failures = 0
-        consecutive_empty = 0
-        max_cf = TABLE_DETECTION_CONFIG['max_consecutive_failures']
-        max_ce = TABLE_DETECTION_CONFIG['max_consecutive_empty']
-        data_start_offset = best_header_row + header_row_count
-        scan_end = block_end + 1
-        sample_data_rows = [rows[r] for r in range(data_start_offset, min(data_start_offset + 15, scan_end))]
-        expected_col_count = estimate_table_column_count(merged_header, sample_data_rows)
-        data_threshold = TABLE_DETECTION_CONFIG['data_row_score_threshold']
-        min_table_rows = TABLE_DETECTION_CONFIG['min_table_rows']
-        data_start_row = -1
-
-        # 计时：数据行扩展
-        t_data_start = time.perf_counter()
-        for row_idx in range(data_start_offset, scan_end):
-            row = rows[row_idx]
-
-            # 快速预过滤：空行（避免进入 score_data_row 的完整评分路径）
-            non_empty_count = count_non_empty_cells(row)
-            if non_empty_count == 0:
-                consecutive_empty += 1
-                if consecutive_empty >= max_ce and len(data_rows) >= min_table_rows:
-                    break
-                continue
-            consecutive_empty = 0
-
-            # 快速预过滤：噪声行（避免进入 score_data_row 遍历每个单元格做 date/amount/time 判型）
-            if looks_like_repeated_header(row, merged_header):
-                consecutive_failures += 0.5
-                continue
-            if looks_like_page_marker(row) or looks_like_print_info(row):
-                consecutive_failures += 0.5
-                continue
-            if looks_like_total_or_subtotal(row):
-                consecutive_failures += 0.5
-                continue
-
-            # 通过预过滤的行才做完整评分（含 data_feature 遍历等）
-            sc, row_type = score_data_row(row, merged_header, expected_col_count)
-            if sc >= data_threshold:
-                data_rows.append(row)
-                if data_start_row == -1:
-                    data_start_row = row_idx
-                consecutive_failures = 0
-            else:
-                consecutive_failures += 1
-                if consecutive_failures >= max_cf and len(data_rows) >= min_table_rows:
-                    break
-        t_data_end = time.perf_counter()
-        _timing['data_extraction'] = t_data_end - t_data_start
-
-        if len(data_rows) < min_table_rows:
-            return {'success': False, 'error': f'候选块[{block_start + 1}-{block_end + 1}]表格区过短 ({len(data_rows)}行)'}
-
-        compact_data_rows = []
-        for row in data_rows:
-            compact_data_rows.append([row[c] if c < len(row) else None for c in valid_columns])
-
-        return {
-            'success': True, 'header_row': best_header_row,
-            'header_row_count': header_row_count, 'header': best_header,
-            'merged_header': merged_header,
-            'valid_columns': valid_columns, 'compact_header': compact_header,
-            'data_start': data_start_row, 'data_end': data_start_row + len(data_rows) - 1,
-            'data_rows': data_rows, 'compact_data_rows': compact_data_rows,
-            'col_count': expected_col_count,
-            'selected_block': {'start_row': block_start, 'end_row': block_end, 'score': block.get('score', 0.0)},
-        }
-
-    for block in candidate_blocks:
-        if block.get('score', 0.0) < block_score_threshold and len(candidate_blocks) > 1:
-            result['audit']['header_failures'].append(f"跳过低分候选块[{block['start_row'] + 1}-{block['end_row'] + 1}] score={block.get('score', 0.0):.2f}")
+        # 快速预过滤：空行直接跳过，不终止采集。
+        # 银行流水等数据中间常有分隔空行，连续空行不代表表格结束，
+        # 因此仅当遇到连续多个“非空但非数据”的行时才终止。
+        non_empty_count = count_non_empty_cells(row)
+        if non_empty_count == 0:
             continue
-        block_result = _try_detect_in_block(block)
-        if block_result.get('success'):
-            result.update({
-                'success': True, 'header_row': block_result['header_row'],
-                'header_row_count': block_result['header_row_count'],
-                'header': block_result['header'], 'valid_columns': block_result['valid_columns'],
-                'compact_header': block_result['compact_header'],
-                'merged_header': block_result['merged_header'],
-                'data_start': block_result['data_start'], 'data_end': block_result['data_end'],
-                'data_rows': block_result['data_rows'], 'compact_data_rows': block_result['compact_data_rows'],
-                'col_count': block_result['col_count'], 'error': None,
-            })
-            result['audit']['selected_block'] = block_result['selected_block']
-            result['audit']['degradation_path'] = 'primary_block'
-            result['timing'] = _timing
-            return result
-        result['audit']['header_failures'].append(block_result.get('error', '候选块识别失败'))
 
-    result['error'] = '候选块识别失败，已触发保底路径'
-    result['audit']['degradation_path'] = 'fallback_raw_extract'
+        # 快速预过滤：噪声行（避免进入 score_data_row 遍历每个单元格）
+        if looks_like_repeated_header(row, merged_header):
+            consecutive_failures += 0.5
+            continue
+        if looks_like_page_marker(row) or looks_like_print_info(row):
+            consecutive_failures += 0.5
+            continue
+        if looks_like_total_or_subtotal(row):
+            consecutive_failures += 0.5
+            continue
+
+        # 通过预过滤的行才做完整评分
+        sc, row_type = score_data_row(row, merged_header, expected_col_count)
+        if sc >= data_threshold:
+            data_rows.append(row)
+            if data_start_row == -1:
+                data_start_row = row_idx
+            consecutive_failures = 0
+        else:
+            consecutive_failures += 1
+            if consecutive_failures >= max_cf and len(data_rows) >= min_table_rows:
+                break
+    t_data_end = time.perf_counter()
+    _timing['data_extraction'] = t_data_end - t_data_start
+
+    if len(data_rows) < min_table_rows:
+        result['error'] = f'表格区过短 ({len(data_rows)}行)'
+        result['audit']['degradation_path'] = 'fallback_raw_extract'
+        return result
+
+    compact_data_rows = []
+    for row in data_rows:
+        compact_data_rows.append([row[c] if c < len(row) else None for c in valid_columns])
+
+    result.update({
+        'success': True, 'header_row': best_header_row,
+        'header_row_count': header_row_count, 'header': best_header,
+        'merged_header': merged_header,
+        'valid_columns': valid_columns, 'compact_header': compact_header,
+        'data_start': data_start_row, 'data_end': data_start_row + len(data_rows) - 1,
+        'data_rows': data_rows, 'compact_data_rows': compact_data_rows,
+        'col_count': expected_col_count, 'error': None,
+    })
+    result['audit']['selected_block'] = {'start_row': best_header_row, 'end_row': scan_end - 1, 'score': best_score}
+    result['audit']['degradation_path'] = 'primary_block'
+    result['timing'] = _timing
     return result
