@@ -4,6 +4,7 @@
 """
 
 import csv
+import io
 import time
 from pathlib import Path
 from typing import List, Any, Optional, Tuple, Dict
@@ -22,6 +23,22 @@ except ImportError:
 
 class ExcelMergeError(Exception):
     pass
+
+
+def _open_workbook(file_path: str, **kwargs):
+    """打开 xlsx 工作簿。
+
+    银行导出文件常见"扩展名 .xls 但实际是 xlsx（zip 头）"的情况，
+    openpyxl 按扩展名直接拒绝；此时改用文件对象打开，绕过扩展名校验。
+    """
+    if Path(file_path).suffix.lower() == '.xls' and detect_file_format(file_path) == 'xlsx':
+        with open(file_path, 'rb') as f:
+            data = f.read()
+        bio = io.BytesIO(data)
+        wb = load_workbook(bio, **kwargs)
+        wb._mislabeled_bytesio = bio  # 保持引用，防止只读模式下底层流被回收
+        return wb
+    return load_workbook(file_path, **kwargs)
 
 
 def detect_file_format(file_path: str) -> str:
@@ -151,7 +168,7 @@ def read_xlsx_sheet_data(file_path: str, sheet_name: Optional[str] = None) -> Tu
     try:
         # 计时：打开工作簿
         t0 = time.perf_counter()
-        source_wb = load_workbook(file_path, read_only=True, data_only=True)
+        source_wb = _open_workbook(file_path, read_only=True, data_only=True)
         t1 = time.perf_counter()
         if sheet_name:
             source_ws = source_wb[sheet_name]
@@ -194,7 +211,7 @@ def get_xlsx_sheet_names(file_path: str) -> List[str]:
     """获取XLSX文件的所有sheet名称"""
     wb = None
     try:
-        wb = load_workbook(file_path, read_only=True)
+        wb = _open_workbook(file_path, read_only=True)
         return list(wb.sheetnames)
     except Exception:
         return []
@@ -227,7 +244,7 @@ def get_sheet_for_merge_info(file_path: str, sheet_name: Optional[str] = None) -
     """
     wb = None
     try:
-        wb = load_workbook(file_path, read_only=False, data_only=True)
+        wb = _open_workbook(file_path, read_only=False, data_only=True)
         if sheet_name:
             ws = wb[sheet_name]
         else:
@@ -321,7 +338,7 @@ def _get_merge_wb_and_sheet(file_path: str, sheet_name: Optional[str] = None) ->
     """
     wb = None
     try:
-        wb = load_workbook(file_path, read_only=False, data_only=True)
+        wb = _open_workbook(file_path, read_only=False, data_only=True)
         if sheet_name:
             ws = wb[sheet_name]
         else:
